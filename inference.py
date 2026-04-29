@@ -10,18 +10,35 @@ from qwen_vl_utils import process_vision_info
 SYSTEM_PROMPT = """You are an expert in deep learning and machine learning.
 You will be shown an image containing a multiple choice question about deep learning.
 Read the question and all options carefully, then select the correct answer.
-Respond with ONLY a single digit: 1, 2, 3, or 4 corresponding to option A, B, C, D respectively.
-If you are not sure at all, respond with 5.
-Do not explain. Do not write anything else. Just one digit."""
+You MUST respond with ONLY a single digit: 1, 2, 3, or 4 corresponding to option A, B, C, D respectively.
+1 = Option A
+2 = Option B
+3 = Option C
+4 = Option D
+Always pick the best answer even if you are not 100% sure. Never respond with 5.
+Do not explain. Do not write anything else. Just one digit (1, 2, 3, or 4)."""
 
 def load_model():
-    model_name = "Qwen/Qwen2-VL-7B-Instruct"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_7b = os.path.join(script_dir, "Qwen2-VL-7B-Instruct")
+    local_2b = os.path.join(script_dir, "Qwen2-VL-2B-Instruct")
+
+    if os.path.exists(local_7b):
+        model_path = local_7b
+    elif os.path.exists(local_2b):
+        model_path = local_2b
+    else:
+        # No local weights — will download at runtime (needs internet)
+        model_path = "Qwen/Qwen2-VL-7B-Instruct"
+
+    print(f"Loading model from: {model_path}")
+
     model = Qwen2VLForConditionalGeneration.from_pretrained(
-        model_name,
+        model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
-    processor = AutoProcessor.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(model_path)
     return model, processor
 
 def predict_answer(image_path, model, processor):
