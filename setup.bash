@@ -2,8 +2,8 @@
 set -e
 
 # Clone the repository
-git clone https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME.git
-cd YOUR_REPO_NAME
+git clone https://github.com/SanuraagM/gnr638-project2.git
+cd gnr638-project2
 
 # Create conda environment with Python 3.11
 conda create -n gnr_project_env python=3.11 -y
