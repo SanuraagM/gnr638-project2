@@ -72,10 +72,22 @@ def load_model():
 
     print(f"Loading model from: {model_path}")
 
+    # Detect available GPUs and split model memory accordingly
+    n_gpus = torch.cuda.device_count()
+    if n_gpus >= 2:
+        # Split across two GPUs (e.g. Kaggle T4 x2: 2x15GB)
+        max_memory = {i: "13GiB" for i in range(n_gpus)}
+        max_memory["cpu"] = "20GiB"
+    elif n_gpus == 1:
+        max_memory = {0: "13GiB", "cpu": "20GiB"}
+    else:
+        max_memory = None
+
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
+        max_memory=max_memory,
     )
     processor = AutoProcessor.from_pretrained(model_path)
     return model, processor
