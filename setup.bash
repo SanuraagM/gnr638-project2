@@ -14,9 +14,15 @@ source activate gnr_project_env
 # Install dependencies
 pip install -r requirements.txt
 
-# Download Qwen2-VL-7B model weights via huggingface-cli
-huggingface-cli download Qwen/Qwen2-VL-7B-Instruct \
-    --local-dir ./Qwen2-VL-7B-Instruct \
-    --local-dir-use-symlinks False
+# Download Qwen2.5-VL-7B model weights
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='Qwen/Qwen2.5-VL-7B-Instruct',
+    local_dir='./Qwen2.5-VL-7B-Instruct',
+    ignore_patterns=['*.bin'],
+)
+print('Model download complete.')
+"
 
 echo "Setup complete!"
