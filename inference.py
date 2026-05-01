@@ -17,8 +17,6 @@ except ImportError:
 
 from transformers import AutoProcessor
 
-CONFIDENCE_THRESHOLD = 0.03
-
 # Max image side in pixels — 1200 keeps detail for text/numbers while fitting in 15GB GPU
 MAX_IMAGE_SIDE = 1200
 
@@ -183,12 +181,8 @@ def predict_answer(image_path, model, processor):
     print(f"  Answer: {answer} | Confidence: {confidence:.4f}")
 
     if answer is None:
-        print(f"  -> No 'Answer: X' in output, skipping (output 5)")
-        return 5
-
-    if confidence < CONFIDENCE_THRESHOLD:
-        print(f"  -> Low confidence ({confidence:.4f} < {CONFIDENCE_THRESHOLD}), skipping (output 5)")
-        return 5
+        print(f"  -> No 'Answer: X' in output, defaulting to 1")
+        return 1
 
     return answer
 

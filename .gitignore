@@ -1,0 +1,7 @@
+submission.csv
+synthetic_test/
+synthetic_test2/
+synthetic_test3/
+__pycache__/
+*.pyc
+*.zip
