@@ -5,12 +5,22 @@ import re
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
-# Confidence threshold against FULL vocabulary
-# If best digit's absolute prob in full vocab is low, model prefers non-digit tokens
+# Try Qwen2.5-VL first (newer), fall back to Qwen2-VL
+try:
+    from transformers import Qwen2_5_VLForConditionalGeneration as QwenVLModel
+    USING_25 = True
+except ImportError:
+    from transformers import Qwen2VLForConditionalGeneration as QwenVLModel
+    USING_25 = False
+
+from transformers import AutoProcessor
+
 CONFIDENCE_THRESHOLD = 0.03
+
+# Max image side in pixels — 1200 keeps detail for text/numbers while fitting in 15GB GPU
+MAX_IMAGE_SIDE = 1200
 
 SYSTEM_PROMPT = """You are an expert in deep learning, CNNs, and machine learning with PhD-level knowledge.
 
@@ -57,25 +67,26 @@ End your response with exactly: "Answer: X" where X is 1, 2, 3, or 4.
 
 If the image is unreadable or the question makes no sense, do NOT write "Answer:" at all."""
 
+
 def load_model():
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_25 = os.path.join(script_dir, "Qwen2.5-VL-7B-Instruct")
     local_7b = os.path.join(script_dir, "Qwen2-VL-7B-Instruct")
     local_2b = os.path.join(script_dir, "Qwen2-VL-2B-Instruct")
 
-    if os.path.exists(local_7b):
+    if os.path.exists(local_25):
+        model_path = local_25
+    elif os.path.exists(local_7b):
         model_path = local_7b
     elif os.path.exists(local_2b):
         model_path = local_2b
     else:
-        # No local weights — will download at runtime (needs internet)
-        model_path = "Qwen/Qwen2-VL-7B-Instruct"
+        model_path = "Qwen/Qwen2.5-VL-7B-Instruct"
 
     print(f"Loading model from: {model_path}")
 
-    # Detect available GPUs and split model memory accordingly
     n_gpus = torch.cuda.device_count()
     if n_gpus >= 2:
-        # Split across two GPUs (e.g. Kaggle T4 x2: 2x15GB)
         max_memory = {i: "13GiB" for i in range(n_gpus)}
         max_memory["cpu"] = "20GiB"
     elif n_gpus == 1:
@@ -83,7 +94,7 @@ def load_model():
     else:
         max_memory = None
 
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model = QwenVLModel.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
@@ -92,10 +103,10 @@ def load_model():
     processor = AutoProcessor.from_pretrained(model_path)
     return model, processor
 
+
 def get_logprob_answer(inputs, model, processor):
     """CoT greedy pass with output_scores; confidence = full-vocab prob of the digit
     at the exact generation step where the model wrote 'Answer: X'."""
-    # Build a lookup: token_id -> digit (1-4), covering both " 2" and "2" forms
     digit_token_map = {}
     for d in range(1, 5):
         for surface in [str(d), " " + str(d)]:
@@ -114,15 +125,12 @@ def get_logprob_answer(inputs, model, processor):
             return_dict_in_generate=True,
         )
 
-    # gen.sequences: (1, input_len + gen_len)
-    # gen.scores:    tuple of (1, vocab) tensors, one per generated token
     input_len = inputs.input_ids.shape[1]
     generated_ids = gen.sequences[0][input_len:].tolist()
-    scores = gen.scores  # tuple length == len(generated_ids)
+    scores = gen.scores
 
     cot_text = processor.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
 
-    # Walk generated tokens; find the digit that follows "Answer:"
     answer = None
     confidence = 0.0
     for i, tid in enumerate(generated_ids):
@@ -130,7 +138,6 @@ def get_logprob_answer(inputs, model, processor):
             prev_text = processor.tokenizer.decode(generated_ids[:i], skip_special_tokens=True)
             if re.search(r'Answer:\s*$', prev_text):
                 answer = digit_token_map[tid]
-                # Full-vocab softmax at the exact step this digit was chosen
                 probs = F.softmax(scores[i][0], dim=0)
                 confidence = probs[tid].item()
                 break
@@ -140,11 +147,12 @@ def get_logprob_answer(inputs, model, processor):
 
 def predict_answer(image_path, model, processor):
     image = Image.open(image_path).convert("RGB")
-    # Cap image size to limit vision encoder patch count (avoids OOM on 15GB GPUs)
-    max_side = 800
-    if max(image.size) > max_side:
-        ratio = max_side / max(image.size)
-        image = image.resize((int(image.size[0] * ratio), int(image.size[1] * ratio)), Image.LANCZOS)
+    if max(image.size) > MAX_IMAGE_SIDE:
+        ratio = MAX_IMAGE_SIDE / max(image.size)
+        image = image.resize(
+            (int(image.size[0] * ratio), int(image.size[1] * ratio)),
+            Image.LANCZOS,
+        )
 
     messages = [
         {
@@ -167,7 +175,6 @@ def predict_answer(image_path, model, processor):
         return_tensors="pt",
     ).to(model.device)
 
-    # Greedy chain-of-thought pass + logprob confidence check
     cot_text, answer, confidence = get_logprob_answer(inputs, model, processor)
     print(f"  Reasoning: {cot_text[:200]}...")
     print(f"  Answer: {answer} | Confidence: {confidence:.4f}")
@@ -194,7 +201,6 @@ def main():
     test_csv_path = os.path.join(test_dir, "test.csv")
     images_dir = os.path.join(test_dir, "images")
 
-    # Read test.csv
     image_names = []
     with open(test_csv_path, "r") as f:
         reader = csv.DictReader(f)
@@ -203,12 +209,10 @@ def main():
 
     print(f"Found {len(image_names)} images to process")
 
-    # Load model
-    print("Loading Qwen2-VL-7B model...")
+    print("Loading model...")
     model, processor = load_model()
     print("Model loaded successfully")
 
-    # Run inference
     results = []
     total_start = time.time()
 
@@ -228,7 +232,6 @@ def main():
         print(f"  -> Answer: {answer} | {elapsed:.1f}s | ETA: {remaining/60:.1f}min")
         results.append({"image_name": image_name, "option": answer})
 
-    # Write submission.csv in the script's directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     submission_path = os.path.join(script_dir, "submission.csv")
     with open(submission_path, "w", newline="") as f:
