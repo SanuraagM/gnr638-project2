@@ -135,6 +135,11 @@ def get_logprob_answer(inputs, model, processor):
 
 def predict_answer(image_path, model, processor):
     image = Image.open(image_path).convert("RGB")
+    # Cap image size to limit vision encoder patch count (avoids OOM on 15GB GPUs)
+    max_side = 800
+    if max(image.size) > max_side:
+        ratio = max_side / max(image.size)
+        image = image.resize((int(image.size[0] * ratio), int(image.size[1] * ratio)), Image.LANCZOS)
 
     messages = [
         {
