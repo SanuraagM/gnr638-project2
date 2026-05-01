@@ -220,7 +220,7 @@ def main():
         image_path = os.path.join(images_dir, f"{image_name}.png")
         if not os.path.exists(image_path):
             print(f"Warning: {image_path} not found, skipping (marking as 5)")
-            results.append({"image_name": image_name, "option": 5})
+            results.append({"id": image_name, "image_name": image_name, "option": 5})
             continue
 
         img_start = time.time()
@@ -230,12 +230,12 @@ def main():
         total_elapsed = time.time() - total_start
         remaining = (total_elapsed / (idx + 1)) * (len(image_names) - idx - 1)
         print(f"  -> Answer: {answer} | {elapsed:.1f}s | ETA: {remaining/60:.1f}min")
-        results.append({"image_name": image_name, "option": answer})
+        results.append({"id": image_name, "image_name": image_name, "option": answer})
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     submission_path = os.path.join(script_dir, "submission.csv")
     with open(submission_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["image_name", "option"])
+        writer = csv.DictWriter(f, fieldnames=["id", "image_name", "option"])
         writer.writeheader()
         writer.writerows(results)
 
