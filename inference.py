@@ -93,44 +93,49 @@ def load_model():
     return model, processor
 
 def get_logprob_answer(inputs, model, processor):
-    """Chain-of-thought greedy pass, then check digit probability against FULL vocabulary."""
-    digit_token_ids = [
-        processor.tokenizer.encode(str(d), add_special_tokens=False)[0]
-        for d in range(1, 5)
-    ]
+    """CoT greedy pass with output_scores; confidence = full-vocab prob of the digit
+    at the exact generation step where the model wrote 'Answer: X'."""
+    # Build a lookup: token_id -> digit (1-4), covering both " 2" and "2" forms
+    digit_token_map = {}
+    for d in range(1, 5):
+        for surface in [str(d), " " + str(d)]:
+            tids = processor.tokenizer.encode(surface, add_special_tokens=False)
+            if len(tids) == 1:
+                digit_token_map[tids[0]] = d
 
     with torch.no_grad():
-        cot_output = model.generate(
+        gen = model.generate(
             **inputs,
-            max_new_tokens=200,
+            max_new_tokens=400,
             do_sample=False,
             temperature=None,
             top_p=None,
+            output_scores=True,
+            return_dict_in_generate=True,
         )
 
-    cot_trimmed = [
-        out_ids[len(in_ids):]
-        for in_ids, out_ids in zip(inputs.input_ids, cot_output)
-    ]
-    cot_text = processor.batch_decode(cot_trimmed, skip_special_tokens=True)[0].strip()
+    # gen.sequences: (1, input_len + gen_len)
+    # gen.scores:    tuple of (1, vocab) tensors, one per generated token
+    input_len = inputs.input_ids.shape[1]
+    generated_ids = gen.sequences[0][input_len:].tolist()
+    scores = gen.scores  # tuple length == len(generated_ids)
 
-    # Append "Answer:" and check what the model wants to generate next
-    answer_suffix = processor.tokenizer.encode("\nAnswer:", add_special_tokens=False, return_tensors="pt")[0].to(inputs.input_ids.device)
-    full_ids = torch.cat([cot_output[0], answer_suffix]).unsqueeze(0)
+    cot_text = processor.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
 
-    with torch.no_grad():
-        logits = model(input_ids=full_ids).logits[0, -1]  # shape: [vocab_size]
+    # Walk generated tokens; find the digit that follows "Answer:"
+    answer = None
+    confidence = 0.0
+    for i, tid in enumerate(generated_ids):
+        if tid in digit_token_map:
+            prev_text = processor.tokenizer.decode(generated_ids[:i], skip_special_tokens=True)
+            if re.search(r'Answer:\s*$', prev_text):
+                answer = digit_token_map[tid]
+                # Full-vocab softmax at the exact step this digit was chosen
+                probs = F.softmax(scores[i][0], dim=0)
+                confidence = probs[tid].item()
+                break
 
-    # Key fix: use FULL vocabulary softmax, not just over 4 digits
-    # This way if the model prefers non-digit tokens, digit probs will be low
-    full_probs = F.softmax(logits, dim=0)
-    digit_probs = [full_probs[tid].item() for tid in digit_token_ids]
-
-    best_idx = int(torch.tensor(digit_probs).argmax().item())
-    best_prob = digit_probs[best_idx]
-    best_digit = best_idx + 1
-
-    return cot_text, best_digit, best_prob
+    return cot_text, answer, confidence
 
 
 def predict_answer(image_path, model, processor):
@@ -164,11 +169,15 @@ def predict_answer(image_path, model, processor):
 
     # Greedy chain-of-thought pass + logprob confidence check
     cot_text, answer, confidence = get_logprob_answer(inputs, model, processor)
-    print(f"  Reasoning: {cot_text[:120]}...")
-    print(f"  Answer: {answer} | Confidence: {confidence:.2f}")
+    print(f"  Reasoning: {cot_text[:200]}...")
+    print(f"  Answer: {answer} | Confidence: {confidence:.4f}")
+
+    if answer is None:
+        print(f"  -> No 'Answer: X' in output, skipping (output 5)")
+        return 5
 
     if confidence < CONFIDENCE_THRESHOLD:
-        print(f"  -> Low confidence, skipping (output 5)")
+        print(f"  -> Low confidence ({confidence:.4f} < {CONFIDENCE_THRESHOLD}), skipping (output 5)")
         return 5
 
     return answer
