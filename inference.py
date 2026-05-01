@@ -81,7 +81,10 @@ def load_model():
     elif os.path.exists(local_2b):
         model_path = local_2b
     else:
-        model_path = "Qwen/Qwen2.5-VL-7B-Instruct"
+        raise RuntimeError(
+            f"No local model found. Run setup.bash first to download the model.\n"
+            f"Expected at: {local_25}"
+        )
 
     print(f"Loading model from: {model_path}")
 
